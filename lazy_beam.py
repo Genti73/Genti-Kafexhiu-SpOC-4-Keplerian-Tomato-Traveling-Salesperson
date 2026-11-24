@@ -1,5 +1,6 @@
 import json
 import os
+import pickle
 import sys
 import time
 import numpy as np
@@ -11,6 +12,8 @@ INSTANCE = sys.argv[1] if len(sys.argv) > 1 else "problems/easy.kttsp"
 K_FAM = int(float(sys.argv[2])) if len(sys.argv) > 2 else 3
 K_EASY = int(float(sys.argv[3])) if len(sys.argv) > 3 else 5
 M_EXC = int(float(sys.argv[4])) if len(sys.argv) > 4 else 2
+ALPHA = float(sys.argv[5]) if len(sys.argv) > 5 else 3.0
+RESUME = sys.argv[6] if len(sys.argv) > 6 else None
 MU = 4.9048695e12
 MARGIN = 0.02
 
@@ -28,7 +31,7 @@ def eval_hop(task):
     """Mbërritja më e hershme për a->b duke u nisur në ose pas t_now, me dV <= lim - MARGIN."""
     a, b, t_now, lim, kind = task
     if kind == 1:
-        ds, ts, tof_max, wait_max = 0.05, 0.02, 3.0, 3.0
+        ds, ts, tof_max, wait_max = 0.05, 0.02, 3.0, 6.0
     elif LOW[a] and LOW[b]:
         ds, ts, tof_max, wait_max = 0.01, 0.01, 2.0, 2.0
     else:
@@ -148,6 +151,37 @@ def main():
                 dead += 1
                 if dead > 1:
                     return False
+        # kontroll për komponente: çdo komponent i ndarë duhet të ketë hyrje dhe (përveç njërit) dalje
+        cb = 1 << c
+        rem = avail
+        n_noexit = 0
+        while rem:
+            lb_ = rem & -rem
+            comp, fr = lb_, lb_
+            while fr:
+                b = fr & -fr
+                fr ^= b
+                new = ue[b.bit_length() - 1] & rem & ~comp
+                comp |= new
+                fr |= new
+            rem &= ~comp
+            if comp & cb:
+                continue
+            outside = avail & ~comp
+            can_in = can_out = False
+            for u in bits(comp):
+                if not can_in and (pe[u] | (px[u] if left > 0 else 0)) & outside:
+                    can_in = True
+                if not can_out and (se[u] | (sx[u] if left > 0 else 0)) & outside:
+                    can_out = True
+                if can_in and can_out:
+                    break
+            if not can_in:
+                return False
+            if not can_out:
+                n_noexit += 1
+                if n_noexit > 1:
+                    return False
         return True
 
     n_proc = max(1, cpu_count() - 1)
@@ -155,12 +189,20 @@ def main():
     print(f"Parametra: K për familje = {K_FAM}, pasues të lehtë = {K_EASY}, pasues përjashtimi = {M_EXC} | procese: {n_proc}")
 
     states = {}
-    for s in range(N):
-        states[(s, 1 << s, 0)] = (t0, (s,), (), (), (), sigbit[s])
+    name = os.path.splitext(os.path.basename(INSTANCE))[0]
+    if RESUME:
+        with open(RESUME, "rb") as fh:
+            states = pickle.load(fh)
+        level_start = len(next(iter(states.values()))[1])
+        print(f"Rinisje nga {RESUME}: {len(states)} gjendje me {level_start} domate të vizituara")
+    else:
+        for s in range(N):
+            states[(s, 1 << s, 0)] = (t0, (s,), (), (), (), sigbit[s])
+        level_start = 1
     cache = {}
     start = time.time()
     with Pool(processes=n_proc, initializer=init_worker, initargs=(low.tolist(),)) as pool:
-        for level in range(1, N):
+        for level in range(level_start, N):
             todo, wanted = [], {}
             for (c, vis, used), st in states.items():
                 t = st[0]
@@ -212,7 +254,15 @@ def main():
 
             groups = {}
             for key2, v in children.items():
-                groups.setdefault((v[5], key2[2]), []).append((v[0], key2, v))
+                j2, vis2_, used2_ = key2
+                U2 = full & ~vis2_
+                near = U2 | (1 << j2)
+                danger = 0
+                for u in bits(U2):
+                    if (ue[u] & near).bit_count() <= 1:
+                        danger += 1
+                groups.setdefault((v[5], key2[2]), []).append((v[0] + ALPHA * danger, key2, v))
+            prev = states
             states = {}
             for fam, lst in groups.items():
                 lst.sort(key=lambda z: z[0])
@@ -226,7 +276,18 @@ def main():
                             break
             if not states:
                 print(f"  Niveli {level + 1}: asnjë gjendje nuk mbijetoi. Beam-i vdiq këtu.")
+                with open(f"lazy_ckpt_{name}_death.pkl", "wb") as fh:
+                    pickle.dump(prev, fh)
+                print(f"  Gjendjet para vdekjes u ruajtën në lazy_ckpt_{name}_death.pkl")
+                kmin = min(prev, key=lambda k: prev[k][0])
+                unv = [u for u in range(N) if not (kmin[1] >> u) & 1]
+                print(f"  Gjendja më e mirë para vdekjes: {N - len(unv)} domate të vizituara, koha {prev[kmin][0]:.1f}, "
+                      f"përjashtime {kmin[2]}")
+                print(f"  Të pavizituara ({len(unv)}):", unv[:80])
                 return
+            if level % 10 == 0:
+                with open(f"lazy_ckpt_{name}_{level + 1}.pkl", "wb") as fh:
+                    pickle.dump(states, fh)
             if level % 10 == 0 or level == N - 1:
                 ts = [v[0] for v in states.values()]
                 print(f"  Niveli {level + 1:4d}/{N}: {len(states):4d} gjendje | koha më e mirë = {min(ts):8.2f} | "
@@ -238,7 +299,6 @@ def main():
     print(f"\nf më e mirë = {t:.3f} ditë | përjashtime: {sum(kinds)} | koha totale: {time.time() - start:.0f} s")
     ok, fv, _, _ = validator.validate(x, TomatoProblem(INSTANCE), show_hops=False)
     if ok:
-        name = os.path.splitext(os.path.basename(INSTANCE))[0]
         out = f"best_lazy_{name}_f{fv:.3f}.json"
         json.dump({"x": [float(v) for v in x[:2 * (N - 1)]] + [int(v) for v in path], "f": fv}, open(out, "w"))
         print("U ruajt:", out)
