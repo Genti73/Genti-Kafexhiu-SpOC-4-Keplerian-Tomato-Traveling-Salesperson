@@ -1,3 +1,4 @@
+import bisect
 import json
 import os
 import pickle
@@ -13,7 +14,11 @@ K_FAM = int(float(sys.argv[2])) if len(sys.argv) > 2 else 3
 K_EASY = int(float(sys.argv[3])) if len(sys.argv) > 3 else 5
 M_EXC = int(float(sys.argv[4])) if len(sys.argv) > 4 else 2
 ALPHA = float(sys.argv[5]) if len(sys.argv) > 5 else 3.0
-RESUME = sys.argv[6] if len(sys.argv) > 6 else None
+RESUME = sys.argv[6] if len(sys.argv) > 6 and sys.argv[6] != "-" else None
+DELTA = float(sys.argv[7]) if len(sys.argv) > 7 else 0.04
+SWEEP = int(float(sys.argv[8])) if len(sys.argv) > 8 else 0
+BACK = float(sys.argv[9]) if len(sys.argv) > 9 else 0.06
+START_TOL = float(sys.argv[10]) if len(sys.argv) > 10 else 0.08
 MU = 4.9048695e12
 MARGIN = 0.02
 
@@ -139,7 +144,24 @@ def main():
             n += 1
         return n
 
+    high_nodes = sorted([i for i in range(N) if not low[i]], key=lambda i: inc[i])
+    inc_sorted = [float(inc[i]) for i in high_nodes]
+    prefix = [0]
+    for i in high_nodes:
+        prefix.append(prefix[-1] | (1 << i))
+    highmask = prefix[-1]
+    sweep_key = [SWEEP * float(inc[i]) for i in range(N)]
+    allowed_starts = [s for s in range(N) if sweep_key[s] <= min(sweep_key) + START_TOL]
+
     def feasible(U, c, left):
+        if DELTA > 0:
+            vh = (full & ~U) & highmask
+            if vh:
+                incs = [float(inc[u]) for u in bits(vh)]
+                l = bisect.bisect_right(inc_sorted, min(incs) + DELTA)
+                r = bisect.bisect_left(inc_sorted, max(incs) - DELTA)
+                if r > l and (prefix[r] & ~prefix[l]) & U:
+                    return False
         if comps(U | (1 << c)) - 1 > left:
             return False
         avail = U | (1 << c)
@@ -196,7 +218,7 @@ def main():
         level_start = len(next(iter(states.values()))[1])
         print(f"Rinisje nga {RESUME}: {len(states)} gjendje me {level_start} domate të vizituara")
     else:
-        for s in range(N):
+        for s in (allowed_starts if SWEEP else range(N)):
             states[(s, 1 << s, 0)] = (t0, (s,), (), (), (), sigbit[s])
         level_start = 1
     cache = {}
@@ -208,26 +230,35 @@ def main():
                 t = st[0]
                 tk = int(round(t * 100))
                 U = full & ~vis
+                front = max((sweep_key[u] for u in st[1] if not low[u]), default=-1e9)
+
+                def okj(j, front=front):
+                    return (not SWEEP) or bool(low[j]) or sweep_key[j] >= front - BACK
                 cl = []
                 for j in easy_order[c]:
-                    if (U >> j) & 1:
+                    if (U >> j) & 1 and okj(j):
                         cl.append((j, 0))
                         if len(cl) >= K_EASY:
                             break
                 if used < E:
                     n_v = 0
                     for j in easy_order[c]:          # variante përjashtimi të kalimeve të lehta
-                        if (U >> j) & 1:
+                        if (U >> j) & 1 and okj(j):
                             cl.append((j, 1))
                             n_v += 1
                             if n_v >= K_EASY:
                                 break
-                    n_ex = 0
-                    for j in exc_order[c]:           # kalime strukturore (kufiri teorik mbi dV_max)
-                        if (U >> j) & 1 and LB[c, j] > dv_max:
-                            cl.append((j, 1))
-                            n_ex += 1
-                            if n_ex >= M_EXC:
+                    n_cross = n_same = 0
+                    for j in exc_order[c]:           # kalime strukturore, të ndara sipas llojit
+                        if (U >> j) & 1 and LB[c, j] > dv_max and okj(j):
+                            if bool(low[j]) != bool(low[c]):
+                                if n_cross < M_EXC:
+                                    cl.append((j, 1))
+                                    n_cross += 1
+                            elif n_same < 3:
+                                cl.append((j, 1))
+                                n_same += 1
+                            if n_cross >= M_EXC and n_same >= 3:
                                 break
                 wanted[(c, vis, used)] = cl
                 for j, kd in cl:
