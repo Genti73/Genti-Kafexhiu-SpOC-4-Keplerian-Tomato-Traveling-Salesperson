@@ -4,7 +4,7 @@ import time
 from utils_users import TomatoProblem
 import validator
 
-INSTANCE = "problems/easy.kttsp"
+INSTANCE = sys.argv[3] if len(sys.argv) > 3 else "problems/easy.kttsp"
 SRC = sys.argv[1] if len(sys.argv) > 1 else "best_solution.json"
 STEP = float(sys.argv[2]) if len(sys.argv) > 2 else 0.02
 MARGIN = 0.02
