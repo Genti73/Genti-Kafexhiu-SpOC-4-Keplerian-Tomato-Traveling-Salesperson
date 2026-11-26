@@ -6,7 +6,6 @@ Space Optimisation Challenge 4 (SpOC 4, GECCO 2026).
 - **Author:** Genti Kafexhiu (individual work)
 - **Course:** Algorithm Design and Analysis (*Dizajni dhe Analiza e Algoritmeve*)
 - **Problem statement and official files:** <https://github.com/esa/SpOC4> (Challenge 2)
-- **Detailed write-up of the approach (Albanian):** [`docs/APPROACH_sq.md`](docs/APPROACH_sq.md)
 
 ## The problem in one paragraph
 
